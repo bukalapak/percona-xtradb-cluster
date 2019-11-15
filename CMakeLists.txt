@@ -550,7 +550,7 @@ IF(WITH_UNIT_TESTS)
 ENDIF()
 
 OPTION(WITH_SYMVER16
-  "Export libmysqlclient_16 and libmysqlclient_18 symbol versions" OFF)
+  "Export libperconaserverclient_16 and libperconaserverclient_18 symbol versions" OFF)
 
 IF(WITH_SYMVER16)
   ADD_DEFINITIONS(-DEXPORT_SYMVER16)

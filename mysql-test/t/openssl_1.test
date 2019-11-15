@@ -144,7 +144,7 @@ drop table t1;
 # and ca path to NULL
 #
 --replace_regex $ALLOWED_CIPHERS_REGEX
---exec $MYSQL --ssl --ssl-key=$MYSQL_TEST_DIR/std_data/client-key.pem --ssl-cert=$MYSQL_TEST_DIR/std_data/client-cert.pem -e "SHOW STATUS LIKE 'ssl_Cipher'" 2>&1
+--exec $MYSQL --ssl --ssl-key=$MYSQL_TEST_DIR/std_data/client-key.pem --ssl-cert=$MYSQL_TEST_DIR/std_data/client-cert.pem -e "SHOW STATUS LIKE 'ssl_Cipher'; SHOW STATUS LIKE 'ssl_version';" 2>&1
 --echo End of 5.0 tests
 
 #
@@ -268,11 +268,7 @@ select 'is still running; no cipher request crashed the server' as result from d
 GRANT SELECT ON test.* TO bug42158@localhost REQUIRE X509;
 FLUSH PRIVILEGES;
 connect(con1,localhost,bug42158,,,,,SSL);
-<<<<<<< HEAD
---replace_result DHE-RSA-AES128-GCM-SHA256 SSL_CIPHER DHE-RSA-AES256-SHA SSL_CIPHER ECDHE-RSA-AES128-GCM-SHA256 SSL_CIPHER
-=======
 --replace_regex $ALLOWED_CIPHERS_REGEX
->>>>>>> wsrep_5.6.46-25.28
 SHOW STATUS LIKE 'Ssl_cipher';
 SHOW STATUS LIKE 'Ssl_version';
 disconnect con1;

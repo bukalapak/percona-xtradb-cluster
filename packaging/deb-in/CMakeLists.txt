@@ -355,6 +355,6 @@ Description: MySQL Common
  library and the MySQL database server.
  This package is a dummy replacement for the case when using mysql WSREP
  implementation to satisfy dependencies of other packages
- like libmysqlclient18. It depends on any mysql-wsrep-common
+ like libperconaserverclient18. It depends on any mysql-wsrep-common
 ")
 ENDIF()

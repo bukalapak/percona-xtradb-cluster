@@ -6333,6 +6333,7 @@ finish:
     {
       thd->killed= THD::NOT_KILLED;
       thd->mysys_var->abort= 0;
+      thd->reset_query_for_display();
     }
   }
 
