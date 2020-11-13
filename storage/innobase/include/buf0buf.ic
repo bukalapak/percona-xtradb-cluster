@@ -173,12 +173,7 @@ buf_page_peek_if_too_old(
 {
 	buf_pool_t*		buf_pool = buf_pool_from_bpage(bpage);
 
-	if (buf_pool->freed_page_clock == 0) {
-		/* If eviction has not started yet, do not update the
-		statistics or move blocks in the LRU list.  This is
-		either the warm-up phase or an in-memory workload. */
-		return(FALSE);
-	} else if (buf_LRU_old_threshold_ms && bpage->old) {
+	if (buf_LRU_old_threshold_ms && bpage->old) {
 		unsigned	access_time = buf_page_is_accessed(bpage);
 
 		if (access_time > 0
