@@ -1355,7 +1355,9 @@ buf_LRU_handle_lack_of_free_blocks(ulint	     n_iterations,
 			(ulong) os_n_fsyncs);
 
 		last_printout_ms = current_ms;
-		*mon_value_was = srv_print_innodb_monitor;
+		if (!*started_monitor) {
+			*mon_value_was = srv_print_innodb_monitor;
+		}
 		*started_monitor = TRUE;
 		srv_print_innodb_monitor = TRUE;
 		os_event_set(lock_sys->timeout_event);
