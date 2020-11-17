@@ -72,6 +72,12 @@ we could get a deadlock. Value of 0 will disable the concurrency check. */
 
 UNIV_INTERN ulong	srv_thread_concurrency	= 0;
 
+UNIV_INTERN uint	srv_concurrency_control_permits = 0;
+UNIV_INTERN uint	srv_concurrency_control_global_queue_size = 1024;
+UNIV_INTERN my_bool	srv_concurrency_control_debug_log = FALSE;
+
+static sem_t*	srv_cc_global_sem;
+
 #ifndef HAVE_ATOMIC_BUILTINS
 
 /** This mutex protects srv_conc data structures */
@@ -158,6 +164,14 @@ srv_conc_init(void)
 #endif /* WITH_WSREP */
 	}
 #endif /* !HAVE_ATOMIC_BUILTINS */
+
+	if (srv_concurrency_control_permits > 0) {
+		srv_cc_global_sem = static_cast<sem_t*>(
+			mem_zalloc(sizeof(sem_t)));
+
+		sem_init(srv_cc_global_sem, 0,
+			srv_concurrency_control_global_queue_size);
+	}
 }
 
 /*********************************************************************//**
@@ -175,6 +189,53 @@ srv_conc_free(void)
 	mem_free(srv_conc_slots);
 	srv_conc_slots = NULL;
 #endif /* !HAVE_ATOMIC_BUILTINS */
+
+	if (srv_concurrency_control_permits > 0) {
+		sem_destroy(srv_cc_global_sem);
+		mem_free(srv_cc_global_sem);
+		srv_cc_global_sem = NULL;
+	}
+}
+
+/********************************************************************//**
+Try to enter the concurrency control global queue.
+@return        TRUE if successful */
+ibool
+srv_conc_enter_global_queue(void)
+/*===============*/
+{
+	int ret;
+
+	ret = sem_trywait(srv_cc_global_sem);
+
+	if (ret != 0) {
+		// No need to log the common EAGAIN case.
+		if (errno != EAGAIN) {
+			ib_logf(IB_LOG_LEVEL_WARN, "can't acquire global semaphore: %d", errno);
+		}
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/********************************************************************//**
+Exit the concurrency control global queue.
+@return        TRUE if successful */
+ibool
+srv_conc_exit_global_queue(void)
+/*===============*/
+{
+	int ret;
+
+	ret = sem_post(srv_cc_global_sem);
+
+	if (ret != 0) {
+		ib_logf(IB_LOG_LEVEL_WARN, "can't acquire global semaphore: %d", errno);
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 #ifdef HAVE_ATOMIC_BUILTINS

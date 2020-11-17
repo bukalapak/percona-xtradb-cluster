@@ -163,11 +163,12 @@ row_search_for_mysql(
 					'mode' */
 	ulint		match_mode,	/*!< in: 0 or ROW_SEL_EXACT or
 					ROW_SEL_EXACT_PREFIX */
-	ulint		direction)	/*!< in: 0 or ROW_SEL_NEXT or
+	ulint		direction,	/*!< in: 0 or ROW_SEL_NEXT or
 					ROW_SEL_PREV; NOTE: if this is != 0,
 					then prebuilt must have a pcur
 					with stored position! In opening of a
 					cursor 'direction' should be 0. */
+	ibool		fought)		/*!< in: fought for the record lock */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /*******************************************************************//**
 Checks if MySQL at the moment is allowed for this table to retrieve a

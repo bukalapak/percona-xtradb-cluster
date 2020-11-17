@@ -5889,7 +5889,7 @@ row_check_index_for_mysql(
 
 	cnt = 1000;
 
-	ret = row_search_for_mysql(buf, PAGE_CUR_G, prebuilt, 0, 0);
+	ret = row_search_for_mysql(buf, PAGE_CUR_G, prebuilt, 0, 0, FALSE);
 loop:
 	/* Check thd->killed every 1,000 scanned rows */
 	if (--cnt == 0) {
@@ -6002,7 +6002,7 @@ not_ok:
 		}
 	}
 
-	ret = row_search_for_mysql(buf, PAGE_CUR_G, prebuilt, 0, ROW_SEL_NEXT);
+	ret = row_search_for_mysql(buf, PAGE_CUR_G, prebuilt, 0, ROW_SEL_NEXT, FALSE);
 
 	goto loop;
 }

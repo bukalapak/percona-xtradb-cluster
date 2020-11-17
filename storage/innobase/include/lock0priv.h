@@ -76,6 +76,9 @@ struct lock_t {
 		lock_table_t	tab_lock;/*!< table lock */
 		lock_rec_t	rec_lock;/*!< record lock */
 	} un_member;			/*!< lock details */
+
+	const buf_block_t*	block;		/*!< block for a record lock */
+	ibool		fought;		/*!< fought for the record lock */
 };
 
 /*********************************************************************//**

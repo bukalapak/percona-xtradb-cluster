@@ -2029,7 +2029,7 @@ ib_cursor_position(
 	dtuple_set_n_fields(prebuilt->search_tuple, 0);
 
 	err = static_cast<ib_err_t>(row_search_for_mysql(
-		buf, mode, prebuilt, 0, 0));
+		buf, mode, prebuilt, 0, 0, FALSE));
 
 	mem_free(buf);
 
@@ -2085,7 +2085,7 @@ ib_cursor_next(
         dtuple_set_n_fields(prebuilt->search_tuple, 0);
 
         err = static_cast<ib_err_t>(row_search_for_mysql(
-		buf, PAGE_CUR_G, prebuilt, 0, ROW_SEL_NEXT));
+		buf, PAGE_CUR_G, prebuilt, 0, ROW_SEL_NEXT, FALSE));
 
         return(err);
 }
@@ -2137,7 +2137,7 @@ ib_cursor_moveto(
 		prebuilt->cursor_heap = cursor->heap;
 	}
 	err = static_cast<ib_err_t>(row_search_for_mysql(
-		buf, ib_srch_mode, prebuilt, cursor->match_mode, 0));
+		buf, ib_srch_mode, prebuilt, cursor->match_mode, 0, FALSE));
 
 	mem_free(buf);
 

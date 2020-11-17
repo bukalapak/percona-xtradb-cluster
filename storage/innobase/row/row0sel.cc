@@ -903,7 +903,7 @@ row_sel_get_clust_rec(
 			clust_rec, index, offsets,
 			static_cast<enum lock_mode>(node->row_lock_mode),
 			lock_type,
-			thr);
+			thr, FALSE);
 
 		switch (err) {
 		case DB_SUCCESS:
@@ -995,7 +995,8 @@ sel_set_rec_lock(
 	ulint			mode,	/*!< in: lock mode */
 	ulint			type,	/*!< in: LOCK_ORDINARY, LOCK_GAP, or
 					LOC_REC_NOT_GAP */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought)	/*!< in: fought for the record lock */
 {
 	trx_t*		trx;
 	dberr_t		err;
@@ -1012,11 +1013,11 @@ sel_set_rec_lock(
 	if (dict_index_is_clust(index)) {
 		err = lock_clust_rec_read_check_and_lock(
 			0, block, rec, index, offsets,
-			static_cast<enum lock_mode>(mode), type, thr);
+			static_cast<enum lock_mode>(mode), type, thr, fought);
 	} else {
 		err = lock_sec_rec_read_check_and_lock(
 			0, block, rec, index, offsets,
-			static_cast<enum lock_mode>(mode), type, thr);
+			static_cast<enum lock_mode>(mode), type, thr, fought);
 	}
 
 	return(err);
@@ -1540,7 +1541,7 @@ rec_loop:
 			err = sel_set_rec_lock(btr_pcur_get_block(&plan->pcur),
 					       next_rec, index, offsets,
 					       node->row_lock_mode,
-					       lock_type, thr);
+					       lock_type, thr, FALSE);
 
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
@@ -1600,7 +1601,7 @@ skip_lock:
 
 		err = sel_set_rec_lock(btr_pcur_get_block(&plan->pcur),
 				       rec, index, offsets,
-				       node->row_lock_mode, lock_type, thr);
+				       node->row_lock_mode, lock_type, thr, FALSE);
 
 		switch (err) {
 		case DB_SUCCESS_LOCKED_REC:
@@ -3231,7 +3232,7 @@ row_sel_get_clust_rec_for_mysql(
 			clust_rec, clust_index, *offsets,
 			static_cast<enum lock_mode>(prebuilt->select_lock_type),
 			LOCK_REC_NOT_GAP,
-			thr);
+			thr, FALSE);
 
 		switch (err) {
 		case DB_SUCCESS:
@@ -3846,11 +3847,12 @@ row_search_for_mysql(
 					'mode' */
 	ulint		match_mode,	/*!< in: 0 or ROW_SEL_EXACT or
 					ROW_SEL_EXACT_PREFIX */
-	ulint		direction)	/*!< in: 0 or ROW_SEL_NEXT or
+	ulint		direction,	/*!< in: 0 or ROW_SEL_NEXT or
 					ROW_SEL_PREV; NOTE: if this is != 0,
 					then prebuilt must have a pcur
 					with stored position! In opening of a
 					cursor 'direction' should be 0. */
+	ibool		fought)		/*!< in: fought for the record lock */
 {
 	dict_index_t*	index		= prebuilt->index;
 	ibool		comp		= dict_table_is_comp(index->table);
@@ -4347,7 +4349,7 @@ wait_table_again:
 			err = sel_set_rec_lock(btr_pcur_get_block(pcur),
 					       next_rec, index, offsets,
 					       prebuilt->select_lock_type,
-					       LOCK_GAP, thr);
+					       LOCK_GAP, thr, FALSE);
 
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
@@ -4479,7 +4481,7 @@ rec_loop:
 			err = sel_set_rec_lock(btr_pcur_get_block(pcur),
 					       rec, index, offsets,
 					       prebuilt->select_lock_type,
-					       LOCK_ORDINARY, thr);
+					       LOCK_ORDINARY, thr, FALSE);
 
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
@@ -4632,7 +4634,7 @@ wrong_offs:
 					btr_pcur_get_block(pcur),
 					rec, index, offsets,
 					prebuilt->select_lock_type, LOCK_GAP,
-					thr);
+					thr, FALSE);
 
 				switch (err) {
 				case DB_SUCCESS_LOCKED_REC:
@@ -4681,7 +4683,7 @@ wrong_offs:
 					btr_pcur_get_block(pcur),
 					rec, index, offsets,
 					prebuilt->select_lock_type, LOCK_GAP,
-					thr);
+					thr, FALSE);
 
 				switch (err) {
 				case DB_SUCCESS_LOCKED_REC:
@@ -4762,7 +4764,7 @@ no_gap_lock:
 		err = sel_set_rec_lock(btr_pcur_get_block(pcur),
 				       rec, index, offsets,
 				       prebuilt->select_lock_type,
-				       lock_type, thr);
+				       lock_type, thr, fought);
 
 		switch (err) {
 			const rec_t*	old_vers;
@@ -4778,6 +4780,8 @@ no_gap_lock:
 			break;
 		case DB_SUCCESS:
 			break;
+		case DB_CONCURRENCY_CONTROL:
+			goto normal_return;
 		case DB_LOCK_WAIT:
 			/* Never unlock rows that were part of a conflict. */
 			prebuilt->new_rec_locks = 0;

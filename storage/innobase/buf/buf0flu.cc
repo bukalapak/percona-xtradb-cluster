@@ -513,6 +513,31 @@ buf_flush_ready_for_replace(
 	ut_ad(bpage->in_LRU_list);
 
 	if (buf_page_in_file(bpage)) {
+		if (srv_concurrency_control_permits > 0) {
+			int val = buf_block_get_semaphore_value((buf_block_t*) bpage);
+			if (val >= 0 && static_cast<ulint>(val) < srv_concurrency_control_permits) {
+				/* From testing, this only happened during the
+				initial rounds of LRU list flushing, as the LRU
+				list was just FIFO until after the very first
+				eviction, leaving hot pages at the bottom of
+				the list, which is generally undesirable for
+				performance reason. As such, we now ensure that
+				LRU list is always maintained (bug#101532), and
+				the warning hasn't appeared since.
+
+				Note that there can be a race condition, such
+				that the warning doesn't appear, yet at the
+				same time a trx would acquire the semaphore, as
+				we do not protect the semaphore with a mutex.
+				As the probability is low while the consequence
+				is rather harmless (the trx would still release
+				the semaphore), we made the decision to not add
+				a mutex.
+				*/
+				ib_logf(IB_LOG_LEVEL_WARN, " [%p] page semaphore value %d, not ready", bpage, val);
+				return(FALSE);
+			}
+		}
 
 		return(bpage->oldest_modification == 0
 		       && bpage->buf_fix_count == 0

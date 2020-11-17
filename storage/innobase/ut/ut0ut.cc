@@ -773,6 +773,8 @@ ut_strerr(
 		return("The queue thread has been suspended");
 	case DB_MISSING_HISTORY:
 		return("Required history data has been deleted");
+	case DB_CONCURRENCY_CONTROL:
+		return("Concurrency control permits depleted");
 	case DB_CLUSTER_NOT_FOUND:
 		return("Cluster not found");
 	case DB_TABLE_NOT_FOUND:

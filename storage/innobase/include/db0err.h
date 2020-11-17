@@ -45,6 +45,10 @@ enum dberr_t {
 	DB_MISSING_HISTORY,		/*!< required history data has been
 					deleted due to lack of space in
 					rollback segment */
+	DB_CONCURRENCY_CONTROL,		/*!< the number of transactions waiting
+					for a record lock in the same block has
+					exceeded the concurrency control
+					threshold */
 	DB_CLUSTER_NOT_FOUND = 30,
 	DB_TABLE_NOT_FOUND,
 	DB_MUST_GET_MORE_FILE_SPACE,	/*!< the database has to be stopped

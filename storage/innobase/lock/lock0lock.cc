@@ -1965,9 +1965,10 @@ lock_rec_create(
 	ulint			heap_no,/*!< in: heap number of the record */
 	dict_index_t*		index,	/*!< in: index of record */
 	trx_t*			trx,	/*!< in/out: transaction */
-	ibool			caller_owns_trx_mutex)
+	ibool			caller_owns_trx_mutex,
 					/*!< in: TRUE if caller owns
 					trx mutex */
+	ibool			fought) /*!< in: fought for the record lock */
 {
 	lock_t*		lock;
 	ulint		page_no;
@@ -2115,6 +2116,14 @@ lock_rec_create(
 		lock_set_lock_and_trx_wait(lock, trx);
 	}
 
+	if (fought) {
+		lock->block = block;
+		lock->fought = TRUE;
+	} else {
+		lock->block = NULL;
+		lock->fought = FALSE;
+	}
+
 	UT_LIST_ADD_LAST(trx_locks, trx->lock.trx_locks, lock);
 
 	if (!caller_owns_trx_mutex) {
@@ -2153,7 +2162,8 @@ lock_rec_enqueue_waiting(
 					the record */
 	ulint			heap_no,/*!< in: heap number of the record */
 	dict_index_t*		index,	/*!< in: index of record */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought) /*!< in: fought for the record lock */
 {
 	trx_t*			trx;
 	lock_t*			lock;
@@ -2205,10 +2215,10 @@ lock_rec_enqueue_waiting(
 		return(DB_DEADLOCK);
 	}
         lock = lock_rec_create(c_lock, thr,
-                type_mode | LOCK_WAIT, block, heap_no, index, trx, TRUE);
+                type_mode | LOCK_WAIT, block, heap_no, index, trx, TRUE, fought);
 #else
 	lock = lock_rec_create(
-		type_mode | LOCK_WAIT, block, heap_no, index, trx, TRUE);
+		type_mode | LOCK_WAIT, block, heap_no, index, trx, TRUE, fought);
 #endif /* WITH_WSREP */
 
 	/* Release the mutex to obey the latching order.
@@ -2290,9 +2300,10 @@ lock_rec_add_to_queue(
 	ulint			heap_no,/*!< in: heap number of the record */
 	dict_index_t*		index,	/*!< in: index of record */
 	trx_t*			trx,	/*!< in/out: transaction */
-	ibool			caller_owns_trx_mutex)
+	ibool			caller_owns_trx_mutex,
 					/*!< in: TRUE if caller owns the
 					transaction mutex */
+	ibool			fought)	/*!< in: fought for the record lock */
 {
 	lock_t*	lock;
 	lock_t*	first_lock;
@@ -2392,11 +2403,11 @@ somebody_waits:
 #ifdef WITH_WSREP
 	return(lock_rec_create(NULL, NULL,
 			type_mode, block, heap_no, index, trx,
-			caller_owns_trx_mutex));
+			caller_owns_trx_mutex, fought));
 #else
 	return(lock_rec_create(
 			type_mode, block, heap_no, index, trx,
-			caller_owns_trx_mutex));
+			caller_owns_trx_mutex, fought));
 #endif
 }
 
@@ -2433,7 +2444,8 @@ lock_rec_lock_fast(
 					the record */
 	ulint			heap_no,/*!< in: heap number of record */
 	dict_index_t*		index,	/*!< in: index of record */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought)	/*!< in: fought for the record lock */
 {
 	lock_t*			lock;
 	trx_t*			trx;
@@ -2457,15 +2469,19 @@ lock_rec_lock_fast(
 
 	trx = thr_get_trx(thr);
 
+	if (srv_concurrency_control_permits > 0) {
+		trx->cc_block = block;
+	}
+
 	if (lock == NULL) {
 		if (!impl) {
 			/* Note that we don't own the trx mutex. */
 #ifdef WITH_WSREP
 			lock = lock_rec_create(NULL, thr,
-				mode, block, heap_no, index, trx, FALSE);
+				mode, block, heap_no, index, trx, FALSE, fought);
 #else
 			lock = lock_rec_create(
-				mode, block, heap_no, index, trx, FALSE);
+				mode, block, heap_no, index, trx, FALSE, fought);
 #endif
 		}
 		status = LOCK_REC_SUCCESS_CREATED;
@@ -2516,7 +2532,8 @@ lock_rec_lock_slow(
 					the record */
 	ulint			heap_no,/*!< in: heap number of record */
 	dict_index_t*		index,	/*!< in: index of record */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought) /*!< in: fought for the record lock */
 {
 	trx_t*			trx;
 #ifdef WITH_WSREP
@@ -2564,25 +2581,46 @@ lock_rec_lock_slow(
 		have a lock strong enough already granted on the
 		record, we have to wait. */
 
+		if (srv_concurrency_control_permits > 0) {
+			if (fought) {
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] fought and gotten the semaphore already", trx->id);
+				}
+			} else if (trx->bypass_cc) {
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] bypass concurrency control", trx->id);
+				}
+			} else if (buf_block_try_acquire_semaphore(block)) {
+				fought = TRUE;
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] got semaphore immediately on %p", trx->id, block);
+				}
+			} else {
+				err = DB_CONCURRENCY_CONTROL;
+			}
+		}
+
+		if (err != DB_CONCURRENCY_CONTROL) {
 #ifdef WITH_WSREP
-                if (wsrep_log_conflicts)
-                        mutex_exit(&trx_sys->mutex);
-		/* c_lock is NULL here if jump to enqueue_waiting happened
-		but it's ok because lock is not NULL in that case and c_lock
-		is not used. */
-		err = lock_rec_enqueue_waiting(c_lock,
-			mode, block, heap_no, index, thr);
-		goto released;
+	                if (wsrep_log_conflicts)
+        	                mutex_exit(&trx_sys->mutex);
+			/* c_lock is NULL here if jump to enqueue_waiting happened
+			but it's ok because lock is not NULL in that case and c_lock
+			is not used. */
+			err = lock_rec_enqueue_waiting(c_lock,
+				mode, block, heap_no, index, thr, fought);
+			goto released;
 #else
-		err = lock_rec_enqueue_waiting(
-			mode, block, heap_no, index, thr);
+			err = lock_rec_enqueue_waiting(
+				mode, block, heap_no, index, thr, fought);
 #endif /* WITH_WSREP */
+		}
 	} else if (!impl) {
 		/* Set the requested lock on the record, note that
 		we already own the transaction mutex. */
 
 		lock_rec_add_to_queue(
-			LOCK_REC | mode, block, heap_no, index, trx, TRUE);
+			LOCK_REC | mode, block, heap_no, index, trx, TRUE, fought);
 
 		err = DB_SUCCESS_LOCKED_REC;
 	}
@@ -2621,7 +2659,8 @@ lock_rec_lock(
 					the record */
 	ulint			heap_no,/*!< in: heap number of record */
 	dict_index_t*		index,	/*!< in: index of record */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought) /*!< in: fought for the record lock */
 {
 	ut_ad(lock_mutex_own());
 	ut_ad((LOCK_MODE_MASK & mode) != LOCK_S
@@ -2637,14 +2676,14 @@ lock_rec_lock(
 
 	/* We try a simplified and faster subroutine for the most
 	common cases */
-	switch (lock_rec_lock_fast(impl, mode, block, heap_no, index, thr)) {
+	switch (lock_rec_lock_fast(impl, mode, block, heap_no, index, thr, fought)) {
 	case LOCK_REC_SUCCESS:
 		return(DB_SUCCESS);
 	case LOCK_REC_SUCCESS_CREATED:
 		return(DB_SUCCESS_LOCKED_REC);
 	case LOCK_REC_FAIL:
 		return(lock_rec_lock_slow(impl, mode, block,
-					  heap_no, index, thr));
+					  heap_no, index, thr, fought));
 	}
 
 	ut_error;
@@ -2814,6 +2853,19 @@ lock_rec_dequeue_from_page(
 	ut_ad(lock_get_type_low(in_lock) == LOCK_REC);
 	/* We may or may not be holding in_lock->trx->mutex here. */
 
+	if (srv_concurrency_control_permits > 0) {
+		if (in_lock->fought) {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, fought, release semaphore on %p", in_lock->trx->id, in_lock->block);
+			}
+			buf_block_release_semaphore(in_lock->block);
+		} else {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, not fought", in_lock->trx->id);
+			}
+		}
+	}
+
 	trx_lock = &in_lock->trx->lock;
 
 	space = in_lock->un_member.rec_lock.space;
@@ -2864,6 +2916,19 @@ lock_rec_discard(
 
 	ut_ad(lock_mutex_own());
 	ut_ad(lock_get_type_low(in_lock) == LOCK_REC);
+
+	if (srv_concurrency_control_permits > 0) {
+		if (in_lock->fought) {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, fought, release semaphore on %p", in_lock->trx->id, in_lock->block);
+			}
+			buf_block_release_semaphore(in_lock->block);
+		} else {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, not fought", in_lock->trx->id);
+			}
+		}
+	}
 
 	trx_lock = &in_lock->trx->lock;
 
@@ -2989,7 +3054,7 @@ lock_rec_inherit_to_gap(
 			lock_rec_add_to_queue(
 				LOCK_REC | LOCK_GAP | lock_get_mode(lock),
 				heir_block, heir_heap_no, lock->index,
-				lock->trx, FALSE);
+				lock->trx, FALSE, FALSE);
 		}
 	}
 }
@@ -3025,7 +3090,7 @@ lock_rec_inherit_to_gap_if_gap_lock(
 			lock_rec_add_to_queue(
 				LOCK_REC | LOCK_GAP | lock_get_mode(lock),
 				block, heir_heap_no, lock->index,
-				lock->trx, FALSE);
+				lock->trx, FALSE, FALSE);
 		}
 	}
 
@@ -3073,7 +3138,7 @@ lock_rec_move(
 
 		lock_rec_add_to_queue(
 			type_mode, receiver, receiver_heap_no,
-			lock->index, lock->trx, FALSE);
+			lock->index, lock->trx, FALSE, FALSE);
 	}
 
 	ut_ad(lock_rec_get_first(donator, donator_heap_no) == NULL);
@@ -3181,7 +3246,7 @@ lock_move_reorganize_page(
 
 				lock_rec_add_to_queue(
 					lock->type_mode, block, new_heap_no,
-					lock->index, lock->trx, FALSE);
+					lock->index, lock->trx, FALSE, FALSE);
 
 				/* if (new_heap_no == PAGE_HEAP_NO_SUPREMUM
 				&& lock_get_wait(lock)) {
@@ -3300,7 +3365,7 @@ lock_move_rec_list_end(
 
 				lock_rec_add_to_queue(
 					type_mode, new_block, heap_no,
-					lock->index, lock->trx, FALSE);
+					lock->index, lock->trx, FALSE, FALSE);
 			}
 
 			page_cur_move_to_next(&cur1);
@@ -3391,7 +3456,7 @@ lock_move_rec_list_start(
 
 				lock_rec_add_to_queue(
 					type_mode, new_block, heap_no,
-					lock->index, lock->trx, FALSE);
+					lock->index, lock->trx, FALSE, FALSE);
 			}
 
 			page_cur_move_to_next(&cur1);
@@ -6496,11 +6561,11 @@ lock_rec_insert_check_and_lock(
 #ifdef WITH_WSREP
 		err = lock_rec_enqueue_waiting(c_lock,
 			LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION,
-			block, next_rec_heap_no, index, thr);
+			block, next_rec_heap_no, index, thr, FALSE);
 #else
 		err = lock_rec_enqueue_waiting(
 			LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION,
-			block, next_rec_heap_no, index, thr);
+			block, next_rec_heap_no, index, thr, FALSE);
 #endif /* WITH_WSREP */
 
 		trx_mutex_exit(trx);
@@ -6624,7 +6689,7 @@ lock_rec_convert_impl_to_expl(
 
 			lock_rec_add_to_queue(
 				type_mode, block, heap_no, index,
-				impl_trx, FALSE);
+				impl_trx, FALSE, FALSE);
 		}
 
 		lock_mutex_exit();
@@ -6682,7 +6747,7 @@ lock_clust_rec_modify_check_and_lock(
 	ut_ad(lock_table_has(thr_get_trx(thr), index->table, LOCK_IX));
 
 	err = lock_rec_lock(TRUE, LOCK_X | LOCK_REC_NOT_GAP,
-			    block, heap_no, index, thr);
+			    block, heap_no, index, thr, FALSE);
 
 	MONITOR_INC(MONITOR_NUM_RECLOCK_REQ);
 
@@ -6746,7 +6811,7 @@ lock_sec_rec_modify_check_and_lock(
 	ut_ad(lock_table_has(thr_get_trx(thr), index->table, LOCK_IX));
 
 	err = lock_rec_lock(TRUE, LOCK_X | LOCK_REC_NOT_GAP,
-			    block, heap_no, index, thr);
+			    block, heap_no, index, thr, FALSE);
 
 	MONITOR_INC(MONITOR_NUM_RECLOCK_REQ);
 
@@ -6810,7 +6875,8 @@ lock_sec_rec_read_check_and_lock(
 					SELECT FOR UPDATE */
 	ulint			gap_mode,/*!< in: LOCK_ORDINARY, LOCK_GAP, or
 					LOCK_REC_NOT_GAP */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought)	/*!< in: fought for the record lock */
 {
 	dberr_t	err;
 	ulint	heap_no;
@@ -6857,7 +6923,7 @@ lock_sec_rec_read_check_and_lock(
 	      || lock_table_has(thr_get_trx(thr), index->table, LOCK_IS));
 
 	err = lock_rec_lock(FALSE, mode | gap_mode,
-			    block, heap_no, index, thr);
+			    block, heap_no, index, thr, fought);
 
 	MONITOR_INC(MONITOR_NUM_RECLOCK_REQ);
 
@@ -6897,7 +6963,8 @@ lock_clust_rec_read_check_and_lock(
 					SELECT FOR UPDATE */
 	ulint			gap_mode,/*!< in: LOCK_ORDINARY, LOCK_GAP, or
 					LOCK_REC_NOT_GAP */
-	que_thr_t*		thr)	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought)	/*!< in: fought for the record lock */
 {
 	dberr_t	err;
 	ulint	heap_no;
@@ -6938,7 +7005,7 @@ lock_clust_rec_read_check_and_lock(
 	      || lock_table_has(thr_get_trx(thr), index->table, LOCK_IS));
 
 	err = lock_rec_lock(FALSE, mode | gap_mode,
-			    block, heap_no, index, thr);
+			    block, heap_no, index, thr, fought);
 
 	MONITOR_INC(MONITOR_NUM_RECLOCK_REQ);
 
@@ -6988,7 +7055,7 @@ lock_clust_rec_read_check_and_lock_alt(
 	offsets = rec_get_offsets(rec, index, offsets,
 				  ULINT_UNDEFINED, &tmp_heap);
 	err = lock_clust_rec_read_check_and_lock(flags, block, rec, index,
-						 offsets, mode, gap_mode, thr);
+						 offsets, mode, gap_mode, thr, FALSE);
 	if (tmp_heap) {
 		mem_heap_free(tmp_heap);
 	}

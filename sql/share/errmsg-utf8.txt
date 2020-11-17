@@ -7147,6 +7147,9 @@ ER_COMPRESSION_DICTIONARY_IS_REFERENCED
 ER_GTID_DEPLOYMENT_STEP_ACTIVE
   eng "super_read_only cannot be changed when gtid_deployment_step is ON"
 
+ER_CONCURRENCY_CONTROL
+  eng "Concurrency control global queue is full"
+
 #
 #  End of 5.6 error messages.
 #

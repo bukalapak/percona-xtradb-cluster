@@ -134,6 +134,18 @@ struct srv_stats_t {
 
 	/** Number of buffered aio requests submitted */
 	ulint_ctr_64_t		n_aio_submitted;
+
+	/** Number of times a query couldn't acquire the concurrency control
+	semaphore immediately */
+	ulint_ctr_1_t		n_concurrency_control_depleted;
+
+	/** Wait time in microseconds when fighting for the concurrency control
+	semaphore */
+	ulint_ctr_1_t		n_concurrency_control_wait_time_us;
+
+	/** Number of times a query is dropped due to concurrency control
+	global queue being full */
+	ulint_ctr_1_t		n_concurrency_control_dropped;
 };
 
 extern const char*	srv_main_thread_op_info;
@@ -1117,6 +1129,10 @@ struct export_var_t{
 	ulint innodb_sec_rec_cluster_reads_avoided; /*!< srv_sec_rec_cluster_reads_avoided */
 
 	ulint innodb_buffered_aio_submitted;
+
+	ulint innodb_concurrency_control_depleted;
+	ulint innodb_concurrency_control_wait_time_us;
+	ulint innodb_concurrency_control_dropped;
 
 	fragmentation_stats_t innodb_fragmentation_stats;/*!< Fragmentation
 						statistics */

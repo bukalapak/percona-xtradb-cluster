@@ -1937,6 +1937,15 @@ srv_export_innodb_status(void)
 	export_vars.innodb_buffered_aio_submitted =
 		srv_stats.n_aio_submitted;
 
+	export_vars.innodb_concurrency_control_depleted =
+		srv_stats.n_concurrency_control_depleted;
+
+	export_vars.innodb_concurrency_control_wait_time_us =
+		srv_stats.n_concurrency_control_wait_time_us;
+
+	export_vars.innodb_concurrency_control_dropped =
+		srv_stats.n_concurrency_control_dropped;
+
 	thd_get_fragmentation_stats(current_thd,
 		&export_vars.innodb_fragmentation_stats);
 

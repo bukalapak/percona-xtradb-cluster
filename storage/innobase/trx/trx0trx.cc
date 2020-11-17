@@ -273,6 +273,9 @@ trx_create(void)
 
 	trx->xid.formatID = -1;
 
+	trx->cc_block = NULL;
+	trx->bypass_cc = FALSE;
+
 	trx->op_info = "";
 
 	trx->api_trx = false;
@@ -1049,6 +1052,9 @@ trx_start_low(
         memset(static_cast<void*>(&trx->xid), 0, sizeof(trx->xid));
         trx->xid.formatID = -1;
 #endif /* WITH_WSREP */
+
+	trx->cc_block = NULL;
+	trx->bypass_cc = FALSE;
 
 	/* The initial value for trx->no: TRX_ID_MAX is used in
 	read_view_open_now: */

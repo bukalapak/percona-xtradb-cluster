@@ -1077,6 +1077,11 @@ buf_block_init(
 
 	block->modify_clock = 0;
 
+	if (srv_concurrency_control_permits > 0) {
+		block->cc_sem = static_cast<sem_t*>(mem_zalloc(sizeof(sem_t)));
+		sem_init(block->cc_sem, 0, srv_concurrency_control_permits);
+	}
+
 #if defined UNIV_DEBUG_FILE_ACCESSES || defined UNIV_DEBUG
 	block->page.file_page_was_freed = FALSE;
 #endif /* UNIV_DEBUG_FILE_ACCESSES || UNIV_DEBUG */
@@ -2534,6 +2539,94 @@ buf_block_align(
 	/* The block should always be found. */
 	ut_error;
 	return(NULL);
+}
+
+/********************************************************************//**
+Get the value of the concurrency control semaphore.
+@return	0 or a positive integer if successful, -1 if failed */
+UNIV_INTERN
+int
+buf_block_get_semaphore_value(
+/*===============*/
+	const buf_block_t*	block)	/*!< in: block */
+{
+	int ret;
+	int sem_value;
+
+	ret = sem_getvalue(block->cc_sem, &sem_value);
+
+	if (ret != 0) {
+		ib_logf(IB_LOG_LEVEL_WARN, " [%p] can't get semaphore value: %d", block, errno);
+		return -1;
+	}
+
+	return sem_value;
+}
+
+/********************************************************************//**
+Try to acquire the concurrency control semaphore (non-blocking).
+@return	TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_try_acquire_semaphore(
+/*===============*/
+	const buf_block_t*	block)	/*!< in: block */
+{
+	int ret;
+
+	ret = sem_trywait(block->cc_sem);
+
+	if (ret != 0) {
+		// No need to log the common EAGAIN case.
+		if (errno != EAGAIN) {
+			ib_logf(IB_LOG_LEVEL_WARN, " [%p] can't acquire semaphore: %d", block, errno);
+		}
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/********************************************************************//**
+Acquire the concurrency control semaphore (blocking).
+@return	TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_acquire_semaphore(
+/*===============*/
+	const buf_block_t*	block)	/*!< in: block */
+{
+	int ret;
+
+	ret = sem_wait(block->cc_sem);
+
+	if (ret != 0) {
+		ib_logf(IB_LOG_LEVEL_WARN, " [%p] can't acquire semaphore: %d", block, errno);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/********************************************************************//**
+Release the concurrency control semaphore.
+@return	TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_release_semaphore(
+/*===============*/
+	const buf_block_t*	block)	/*!< in: block */
+{
+	int ret;
+
+	ret = sem_post(block->cc_sem);
+
+	if (ret != 0) {
+		ib_logf(IB_LOG_LEVEL_WARN, " [%p] can't release semaphore: %d", block, errno);
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 /********************************************************************//**

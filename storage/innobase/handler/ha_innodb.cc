@@ -996,6 +996,12 @@ static SHOW_VAR innodb_status_variables[]= {
   (char*) &export_vars.innodb_rows_read,		  SHOW_LONG},
   {"rows_updated",
   (char*) &export_vars.innodb_rows_updated,		  SHOW_LONG},
+  {"concurrency_control_depleted",
+  (char*) &export_vars.innodb_concurrency_control_depleted,	  SHOW_LONG},
+  {"concurrency_control_wait_time_us",
+  (char*) &export_vars.innodb_concurrency_control_wait_time_us,	  SHOW_LONG},
+  {"concurrency_control_dropped",
+  (char*) &export_vars.innodb_concurrency_control_dropped,	  SHOW_LONG},
   {"num_open_files",
   (char*) &export_vars.innodb_num_open_files,		  SHOW_LONG},
   {"read_views_memory",
@@ -1665,6 +1671,54 @@ innobase_srv_conc_enter_innodb(
 	if (wsrep_on(trx->mysql_thd) && 
 	    wsrep_thd_is_BF(trx->mysql_thd, FALSE)) return;
 #endif /* WITH_WSREP */
+
+	if (srv_concurrency_control_permits > 0) {
+		if (trx->bypass_cc) {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] force enter critical trx", trx->id);
+			}
+			return;
+		} else if (trx->lock.trx_locks.count > 1
+			   && trx->cc_block != NULL) {
+
+			/* The 2 if-conditions here (above and below) are what
+			tie the whole concurrency patch together. We need to
+			balance between:
+			- allowing the necessary trxs to avoid deadlock
+			- not allowing too many concurrently running trxs
+
+			The "trx_locks.count > 1" condition means the trx did
+			enter innodb and accumulated some locks (with or
+			without contenting trx(s)).
+
+			The "permits - val > 1" condition means there is at
+			least 1 other trx that has acquired the same block
+			semaphore as this trx.
+
+			When both conditions are met, we treat the trx as
+			"critical" and allow it to enter freely from this point
+			onward.
+
+			For hot-row protection purpose, this seems to work much
+			better than the built-in thread-pool, which would allow
+			too many concurrently running trxs.
+			*/
+
+			int val = buf_block_get_semaphore_value(trx->cc_block);
+			if (val >= 0
+			    && srv_concurrency_control_permits - val > 1) {
+
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] force enter as potentially holding a lock with waiting trx(s)", trx->id);
+				}
+				// Also allow the critical trx to bypass any
+				// further concurrency control.
+				trx->bypass_cc = TRUE;
+				return;
+			}
+		}
+	}
+
 	if (srv_thread_concurrency) {
 		if (trx->n_tickets_to_enter_innodb > 0) {
 
@@ -2028,6 +2082,14 @@ convert_error_code_to_mysql(
 		}
 
 		return(HA_ERR_LOCK_WAIT_TIMEOUT);
+
+	case DB_CONCURRENCY_CONTROL:
+		if (thd) {
+			thd_mark_transaction_to_rollback(
+				thd, (bool) row_rollback_on_timeout);
+		}
+
+		return(HA_ERR_CONCURRENCY_CONTROL);
 
 	case DB_NO_REFERENCED_ROW:
 		return(HA_ERR_NO_REFERENCED_ROW);
@@ -9620,7 +9682,44 @@ ha_innobase::index_read(
 		innobase_srv_conc_enter_innodb(prebuilt->trx);
 
 		ret = row_search_for_mysql((byte*) buf, mode, prebuilt,
-					   match_mode, 0);
+					   match_mode, 0, FALSE);
+
+		if (ret == DB_CONCURRENCY_CONTROL) {
+			srv_stats.n_concurrency_control_depleted.inc();
+
+			if (srv_conc_enter_global_queue()) {
+				innobase_srv_conc_force_exit_innodb(prebuilt->trx);
+
+				prebuilt->trx->op_info = "acquiring concurrency control semaphore";
+
+				const buf_block_t* block = prebuilt->trx->cc_block;
+
+				ullint usec = ut_time_us(NULL);
+
+				ibool acquired = buf_block_acquire_semaphore(block);
+				srv_conc_exit_global_queue();
+
+				ullint time_diff = ut_time_us(NULL) - usec;
+				srv_stats.n_concurrency_control_wait_time_us.add(time_diff);
+
+				if (acquired) {
+					if (srv_concurrency_control_debug_log) {
+						ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] acquired semaphore on %p after %llu microseconds", prebuilt->trx->id, block, time_diff);
+					}
+				} else {
+					ib_logf(IB_LOG_LEVEL_ERROR, "[" TRX_ID_FMT "] failed to acquire semaphore on %p, errno %d", prebuilt->trx->id, block, errno);
+				}
+
+				prebuilt->trx->op_info = "";
+
+				srv_conc_force_enter_innodb(prebuilt->trx);
+
+				ret = row_search_for_mysql((byte*) buf, mode, prebuilt,
+							   match_mode, 0, acquired);
+			} else {
+				srv_stats.n_concurrency_control_dropped.inc();
+			}
+		}
 
 		innobase_srv_conc_exit_innodb(prebuilt->trx);
 	} else {
@@ -9891,7 +9990,7 @@ ha_innobase::general_fetch(
 	innobase_srv_conc_enter_innodb(prebuilt->trx);
 
 	ret = row_search_for_mysql(
-		(byte*) buf, 0, prebuilt, match_mode, direction);
+		(byte*) buf, 0, prebuilt, match_mode, direction, FALSE);
 
 	innobase_srv_conc_exit_innodb(prebuilt->trx);
 
@@ -10433,7 +10532,7 @@ next_record:
 		innobase_srv_conc_enter_innodb(prebuilt->trx);
 
 		dberr_t ret = row_search_for_mysql(
-			(byte*) buf, PAGE_CUR_GE, prebuilt, ROW_SEL_EXACT, 0);
+			(byte*) buf, PAGE_CUR_GE, prebuilt, ROW_SEL_EXACT, 0, FALSE);
 
 		innobase_srv_conc_exit_innodb(prebuilt->trx);
 
@@ -20504,6 +20603,33 @@ static MYSQL_SYSVAR_BOOL(deadlock_detect, srv_deadlock_detect,
   "Enableds deadlock detection checking.",
   NULL, NULL, TRUE);
 
+static MYSQL_SYSVAR_UINT(concurrency_control_permits,
+  srv_concurrency_control_permits,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "The number of permits for the concurrency control semaphore, which needs to"
+  " be acquired whenever there is a conflicting lock request on the same page."
+  " Once the permits have depleted, a transaction needing one would be blocked"
+  " until it can acquire a permit released by the others. This is to prevent"
+  " stalling the server from either deadlock detection (bug#49047) or lock"
+  " queueing (bug#53825), when trying to repeatedly update the same record,"
+  " especially when the updates are pessimistic. 0 to disable (default).",
+  NULL, NULL, 0, 0, 256, 0);
+
+static MYSQL_SYSVAR_UINT(concurrency_control_global_queue_size,
+  srv_concurrency_control_global_queue_size,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "As backlog starts to accumulate with transactions in blocking wait, the"
+  " server may run out of connections to do useful work. As such, there is"
+  " a global queue to limit the number of transactions in blocking wait. Once"
+  " the queue is full, a transaction would be dropped instead of entering"
+  " blocking wait, to provide back pressure.",
+  NULL, NULL, 1024, 0, 16384, 0);
+
+static MYSQL_SYSVAR_BOOL(concurrency_control_debug_log, srv_concurrency_control_debug_log,
+  PLUGIN_VAR_NOCMDARG,
+  "Enable debug logging for concurrency control.",
+  NULL, NULL, FALSE);
+
 static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(log_block_size),
   MYSQL_SYSVAR(additional_mem_pool_size),
@@ -20707,6 +20833,9 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(tmpdir),
   MYSQL_SYSVAR(compressed_columns_zip_level),
   MYSQL_SYSVAR(compressed_columns_threshold),
+  MYSQL_SYSVAR(concurrency_control_permits),
+  MYSQL_SYSVAR(concurrency_control_global_queue_size),
+  MYSQL_SYSVAR(concurrency_control_debug_log),
   NULL
 };
 

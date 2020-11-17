@@ -38,6 +38,8 @@ Created 11/5/1995 Heikki Tuuri
 #include "os0proc.h"
 #include "log0log.h"
 
+#include <semaphore.h>
+
 /** @name Modes for buf_page_get_gen */
 /* @{ */
 #define BUF_GET			10	/*!< get always */
@@ -1144,6 +1146,38 @@ buf_block_align(
 /*============*/
 	const byte*	ptr);	/*!< in: pointer to a frame */
 /********************************************************************//**
+Get the value of the concurrency control semaphore.
+@return 0 or a positive integer if successful, -1 if failed */
+UNIV_INTERN
+int
+buf_block_get_semaphore_value(
+/*===============*/
+	const buf_block_t*	block);	/*!< in: block */
+/********************************************************************//**
+Try to acquire the concurrency control semaphore (non-blocking).
+@return TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_try_acquire_semaphore(
+/*===============*/
+	const buf_block_t*	block);	/*!< in: block */
+/********************************************************************//**
+Acquire the concurrency control semaphore (blocking).
+@return TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_acquire_semaphore(
+/*===============*/
+	const buf_block_t*	block);	/*!< in: block */
+/********************************************************************//**
+Release the concurrency control semaphore.
+@return TRUE if successful */
+UNIV_INTERN
+ibool
+buf_block_release_semaphore(
+/*===============*/
+	const buf_block_t*	block);	/*!< in: block */
+/********************************************************************//**
 Find out if a pointer belongs to a buf_block_t. It can be a pointer to
 the buf_block_t itself or a member of it
 @return	TRUE if ptr belongs to a buf_block_t struct */
@@ -1671,6 +1705,7 @@ struct buf_block_t{
 					decompressed LRU list;
 					used in debugging */
 #endif /* UNIV_DEBUG */
+	sem_t*		cc_sem;		/*!< concurrency control semaphore */
 	ib_mutex_t	mutex;		/*!< mutex protecting this block:
 					state, io_fix, buf_fix_count,
 					and accessed; we introduce this new

@@ -40,6 +40,8 @@ Created 2011/04/18 Sunny Bains
 #ifndef srv_conc_h
 #define srv_conc_h
 
+#include <semaphore.h>
+
 /** We are prepared for a situation that we have this many threads waiting for
 a semaphore inside InnoDB. innobase_start_or_create_for_mysql() sets the
 value. */
@@ -52,6 +54,17 @@ we could get a deadlock. Value of 0 will disable the concurrency check. */
 
 extern ulong	srv_thread_concurrency;
 
+/** At high concurrency, particularly when repeatedly locking the same record,
+the server would end up stalling due to either:
+- deadlock detection, bug#49047
+- lock queueing with pessimistic update, bug#53825
+As such, a page-level semaphore is added to control the number of threads
+waiting for a conflicting lock.
+*/
+extern uint	srv_concurrency_control_permits;
+extern uint	srv_concurrency_control_global_queue_size;
+extern my_bool	srv_concurrency_control_debug_log;
+
 /*********************************************************************//**
 Initialise the concurrency management data structures */
 void
@@ -63,6 +76,20 @@ Free the concurrency management data structures */
 void
 srv_conc_free(void);
 /*===============*/
+
+/********************************************************************//**
+Try to enter the concurrency control global queue.
+@return        TRUE if successful */
+UNIV_INTERN
+ibool
+srv_conc_enter_global_queue(void);
+
+/********************************************************************//**
+Exit the concurrency control global queue.
+@return        TRUE if successful */
+UNIV_INTERN
+ibool
+srv_conc_exit_global_queue(void);
 
 /*********************************************************************//**
 Puts an OS thread to wait if there are too many concurrent threads

@@ -359,7 +359,8 @@ lock_sec_rec_read_check_and_lock(
 					SELECT FOR UPDATE */
 	ulint			gap_mode,/*!< in: LOCK_ORDINARY, LOCK_GAP, or
 					LOCK_REC_NOT_GAP */
-	que_thr_t*		thr);	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought);/*!< in: fought for the record lock */
 /*********************************************************************//**
 Checks if locks of other transactions prevent an immediate read, or passing
 over by a read cursor, of a clustered index record. If they do, first tests
@@ -389,7 +390,8 @@ lock_clust_rec_read_check_and_lock(
 					SELECT FOR UPDATE */
 	ulint			gap_mode,/*!< in: LOCK_ORDINARY, LOCK_GAP, or
 					LOCK_REC_NOT_GAP */
-	que_thr_t*		thr);	/*!< in: query thread */
+	que_thr_t*		thr,	/*!< in: query thread */
+	ibool			fought);/*!< in: fought for the record lock */
 /*********************************************************************//**
 Checks if locks of other transactions prevent an immediate read, or passing
 over by a read cursor, of a clustered index record. If they do, first tests
