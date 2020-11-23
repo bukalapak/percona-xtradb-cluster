@@ -2117,9 +2117,12 @@ lock_rec_create(
 	}
 
 	if (fought) {
+		ut_a(trx->cc_block_sem_acquired);
+		trx->cc_block_sem_acquired = FALSE;
 		lock->block = block;
 		lock->fought = TRUE;
 	} else {
+		ut_a(!trx->cc_block_sem_acquired);
 		lock->block = NULL;
 		lock->fought = FALSE;
 	}
@@ -2591,6 +2594,7 @@ lock_rec_lock_slow(
 					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] bypass concurrency control", trx->id);
 				}
 			} else if (buf_block_try_acquire_semaphore(block)) {
+				trx->cc_block_sem_acquired = TRUE;
 				fought = TRUE;
 				if (srv_concurrency_control_debug_log) {
 					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] got semaphore immediately on %p", trx->id, block);

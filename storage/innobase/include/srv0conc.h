@@ -63,6 +63,7 @@ waiting for a conflicting lock.
 */
 extern uint	srv_concurrency_control_permits;
 extern uint	srv_concurrency_control_global_queue_size;
+extern uint	srv_concurrency_control_sleep_time_us;
 extern my_bool	srv_concurrency_control_debug_log;
 
 /*********************************************************************//**

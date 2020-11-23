@@ -5163,6 +5163,18 @@ innobase_kill_connection(
 	{
 		trx_mutex_enter(trx);
 
+		if (trx->cc_block_sem_acquired) {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] kill connection, release semaphore on %p", trx->id, trx->cc_block);
+			}
+			buf_block_release_semaphore(trx->cc_block);
+			trx->cc_block_sem_acquired = FALSE;
+		} else {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] kill connection", trx->id);
+			}
+		}
+
 		/* Cancel a pending lock request. */
 		if (trx->lock.wait_lock)
 			lock_cancel_waiting_and_release(trx->lock.wait_lock);
@@ -9694,20 +9706,42 @@ ha_innobase::index_read(
 
 				const buf_block_t* block = prebuilt->trx->cc_block;
 
-				ullint usec = ut_time_us(NULL);
+				ibool acquired = FALSE;
+				int error = 0;
 
-				ibool acquired = buf_block_acquire_semaphore(block);
+				os_thread_sleep(srv_concurrency_control_sleep_time_us);
+				srv_stats.n_concurrency_control_wait_time_us.add(
+					srv_concurrency_control_sleep_time_us);
+				ulint n_retries = 1;
+
+				while (!trx_is_interrupted(prebuilt->trx)) {
+					trx_mutex_enter(prebuilt->trx);
+					acquired = buf_block_try_acquire_semaphore(block);
+					if (acquired) {
+						prebuilt->trx->cc_block_sem_acquired = TRUE;
+					} else {
+						error = errno;
+					}
+					trx_mutex_exit(prebuilt->trx);
+
+					if (acquired) {
+						break;
+					}
+
+					if (error != EAGAIN) {
+						break;
+					}
+
+					os_thread_sleep(srv_concurrency_control_sleep_time_us);
+					srv_stats.n_concurrency_control_wait_time_us.add(
+						srv_concurrency_control_sleep_time_us);
+					n_retries++;
+				}
+
 				srv_conc_exit_global_queue();
 
-				ullint time_diff = ut_time_us(NULL) - usec;
-				srv_stats.n_concurrency_control_wait_time_us.add(time_diff);
-
-				if (acquired) {
-					if (srv_concurrency_control_debug_log) {
-						ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] acquired semaphore on %p after %llu microseconds", prebuilt->trx->id, block, time_diff);
-					}
-				} else {
-					ib_logf(IB_LOG_LEVEL_ERROR, "[" TRX_ID_FMT "] failed to acquire semaphore on %p, errno %d", prebuilt->trx->id, block, errno);
+				if (acquired && srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] acquired semaphore on %p after %lu us", prebuilt->trx->id, block, n_retries * srv_concurrency_control_sleep_time_us);
 				}
 
 				prebuilt->trx->op_info = "";
@@ -20625,6 +20659,13 @@ static MYSQL_SYSVAR_UINT(concurrency_control_global_queue_size,
   " blocking wait, to provide back pressure.",
   NULL, NULL, 1024, 0, 16384, 0);
 
+static MYSQL_SYSVAR_UINT(concurrency_control_sleep_time_us,
+  srv_concurrency_control_sleep_time_us,
+  PLUGIN_VAR_RQCMDARG,
+  "Sleep time in microseconds after failing to acquire the concurrency control"
+  " semaphore.",
+  NULL, NULL, 10000, 0, 1000000, 0);
+
 static MYSQL_SYSVAR_BOOL(concurrency_control_debug_log, srv_concurrency_control_debug_log,
   PLUGIN_VAR_NOCMDARG,
   "Enable debug logging for concurrency control.",
@@ -20835,6 +20876,7 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(compressed_columns_threshold),
   MYSQL_SYSVAR(concurrency_control_permits),
   MYSQL_SYSVAR(concurrency_control_global_queue_size),
+  MYSQL_SYSVAR(concurrency_control_sleep_time_us),
   MYSQL_SYSVAR(concurrency_control_debug_log),
   NULL
 };

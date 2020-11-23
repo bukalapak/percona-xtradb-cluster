@@ -74,6 +74,7 @@ UNIV_INTERN ulong	srv_thread_concurrency	= 0;
 
 UNIV_INTERN uint	srv_concurrency_control_permits = 0;
 UNIV_INTERN uint	srv_concurrency_control_global_queue_size = 1024;
+UNIV_INTERN uint	srv_concurrency_control_sleep_time_us = 10000;
 UNIV_INTERN my_bool	srv_concurrency_control_debug_log = FALSE;
 
 static sem_t*	srv_cc_global_sem;

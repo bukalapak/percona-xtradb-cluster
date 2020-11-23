@@ -1068,6 +1068,7 @@ struct trx_t{
 	ulint           innodb_que_wait_timer;
 	ulint           distinct_page_access;
 	const buf_block_t*	cc_block;
+	ibool		cc_block_sem_acquired;
 	ibool		bypass_cc;
 #define	DPAH_SIZE	8192
 	byte*		distinct_page_access_hash;

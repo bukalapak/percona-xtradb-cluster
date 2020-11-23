@@ -274,6 +274,7 @@ trx_create(void)
 	trx->xid.formatID = -1;
 
 	trx->cc_block = NULL;
+	trx->cc_block_sem_acquired = FALSE;
 	trx->bypass_cc = FALSE;
 
 	trx->op_info = "";
@@ -1054,6 +1055,7 @@ trx_start_low(
 #endif /* WITH_WSREP */
 
 	trx->cc_block = NULL;
+	trx->cc_block_sem_acquired = FALSE;
 	trx->bypass_cc = FALSE;
 
 	/* The initial value for trx->no: TRX_ID_MAX is used in
