@@ -2755,9 +2755,9 @@ lock_grant(
 {
 	ut_ad(lock_mutex_own());
 
-	lock_reset_lock_and_trx_wait(lock);
-
 	trx_mutex_enter(lock->trx);
+
+	lock_reset_lock_and_trx_wait(lock);
 
 	if (lock_get_mode(lock) == LOCK_AUTO_INC) {
 		dict_table_t*	table = lock->un_member.tab_lock.table;
@@ -2818,11 +2818,11 @@ lock_rec_cancel(
 
 	/* Reset the wait flag and the back pointer to lock in trx */
 
+	trx_mutex_enter(lock->trx);
+
 	lock_reset_lock_and_trx_wait(lock);
 
 	/* The following function releases the trx from lock wait */
-
-	trx_mutex_enter(lock->trx);
 
 	thr = que_thr_end_lock_wait(lock->trx);
 
