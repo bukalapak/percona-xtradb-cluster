@@ -260,6 +260,8 @@ trx_create(void)
 	trx->lock.lock_heap = mem_heap_create_typed(
 		256, MEM_HEAP_FOR_LOCK_HEAP);
 
+	trx->lock.n_rec_locks = 0;
+
 	trx->search_latch_timeout = BTR_SEA_TIMEOUT;
 
 	trx->io_reads = 0;

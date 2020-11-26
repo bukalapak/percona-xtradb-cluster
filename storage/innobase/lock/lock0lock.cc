@@ -1166,6 +1166,8 @@ lock_rec_set_nth_bit(
 	bit_index = i % 8;
 
 	((byte*) &lock[1])[byte_index] |= 1 << bit_index;
+
+	++lock->trx->lock.n_rec_locks;
 }
 
 /**********************************************************************//**
@@ -1213,6 +1215,8 @@ lock_rec_reset_nth_bit(
 	bit_index = i % 8;
 
 	((byte*) &lock[1])[byte_index] &= ~(1 << bit_index);
+
+	--lock->trx->lock.n_rec_locks;
 }
 
 /*********************************************************************//**
@@ -1898,28 +1902,9 @@ lock_number_of_rows_locked(
 /*=======================*/
 	const trx_lock_t*	trx_lock)	/*!< in: transaction locks */
 {
-	const lock_t*	lock;
-	ulint		n_records = 0;
-
 	ut_ad(lock_mutex_own());
 
-	for (lock = UT_LIST_GET_FIRST(trx_lock->trx_locks);
-	     lock != NULL;
-	     lock = UT_LIST_GET_NEXT(trx_locks, lock)) {
-
-		if (lock_get_type_low(lock) == LOCK_REC) {
-			ulint	n_bit;
-			ulint	n_bits = lock_rec_get_n_bits(lock);
-
-			for (n_bit = 0; n_bit < n_bits; n_bit++) {
-				if (lock_rec_get_nth_bit(lock, n_bit)) {
-					n_records++;
-				}
-			}
-		}
-	}
-
-	return(n_records);
+	return(trx_lock->n_rec_locks);
 }
 
 /*============== RECORD LOCK CREATION AND QUEUE MANAGEMENT =============*/
@@ -7501,6 +7486,8 @@ lock_trx_release_locks(
 	mutex_exit(&trx_sys->mutex);
 
 	lock_release(trx);
+
+	trx->lock.n_rec_locks = 0;
 
 	lock_mutex_exit();
 }
