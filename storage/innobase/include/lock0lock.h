@@ -39,6 +39,8 @@ Created 5/7/1996 Heikki Tuuri
 #include "srv0srv.h"
 #include "ut0vec.h"
 
+#include <atomic>
+
 #ifdef UNIV_DEBUG
 extern ibool	lock_print_waits;
 #endif /* UNIV_DEBUG */
@@ -927,7 +929,7 @@ struct lock_sys_t{
 						locks */
 	hash_table_t*	rec_hash;		/*!< hash table of the record
 						locks */
-	ulint		rec_num;
+	std::atomic<ulint>	rec_num;
 	ib_mutex_t	wait_mutex;		/*!< Mutex protecting the
 						next two fields */
 	srv_slot_t*	waiting_threads;	/*!< Array  of user threads
