@@ -2102,12 +2102,14 @@ lock_rec_create(
 	}
 
 	if (fought) {
+		if (trx->cc_block != block) {
+			ib_logf(IB_LOG_LEVEL_WARN, "[" TRX_ID_FMT "] fought for semaphore on %p, currently on %p", trx->id, trx->cc_block, block);
+		}
 		ut_a(trx->cc_block_sem_acquired);
-		trx->cc_block_sem_acquired = FALSE;
-		lock->block = block;
+		ut_a(!trx->cc_block_sem_released);
+		lock->block = trx->cc_block;
 		lock->fought = TRUE;
 	} else {
-		ut_a(!trx->cc_block_sem_acquired);
 		lock->block = NULL;
 		lock->fought = FALSE;
 	}
@@ -2458,7 +2460,19 @@ lock_rec_lock_fast(
 	trx = thr_get_trx(thr);
 
 	if (srv_concurrency_control_permits > 0) {
-		trx->cc_block = block;
+		trx_mutex_enter(trx);
+
+		if (trx->cc_block_sem_acquired && !trx->cc_block_sem_released) {
+			if (srv_concurrency_control_debug_log) {
+				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] still in concurrency control for block %p", trx->id, trx->cc_block);
+			}
+		} else {
+			trx->cc_block = block;
+			trx->cc_block_sem_acquired = FALSE;
+			trx->cc_block_sem_released = FALSE;
+		}
+
+		trx_mutex_exit(trx);
 	}
 
 	if (lock == NULL) {
@@ -2574,7 +2588,7 @@ lock_rec_lock_slow(
 				if (srv_concurrency_control_debug_log) {
 					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] fought and gotten the semaphore already", trx->id);
 				}
-			} else if (trx->bypass_cc) {
+			} else if (trx->cc_block_sem_acquired && !trx->cc_block_sem_released) {
 				if (srv_concurrency_control_debug_log) {
 					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] bypass concurrency control", trx->id);
 				}
@@ -2582,7 +2596,7 @@ lock_rec_lock_slow(
 				trx->cc_block_sem_acquired = TRUE;
 				fought = TRUE;
 				if (srv_concurrency_control_debug_log) {
-					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] got semaphore immediately on %p", trx->id, block);
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] acquired semaphore on %p immediately", trx->id, block);
 				}
 			} else {
 				err = DB_CONCURRENCY_CONTROL;
@@ -2826,12 +2840,16 @@ static
 void
 lock_rec_dequeue_from_page(
 /*=======================*/
-	lock_t*		in_lock)	/*!< in: record lock object: all
+	lock_t*		in_lock,	/*!< in: record lock object: all
 					record locks which are contained in
 					this lock object are removed;
 					transactions waiting behind will
 					get their lock requests granted,
 					if they are now qualified to it */
+	ibool		caller_owns_trx_mutex)
+					/*!< in: TRUE if caller owns
+					trx mutex */
+
 {
 	ulint		space;
 	ulint		page_no;
@@ -2844,10 +2862,29 @@ lock_rec_dequeue_from_page(
 
 	if (srv_concurrency_control_permits > 0) {
 		if (in_lock->fought) {
-			if (srv_concurrency_control_debug_log) {
-				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, fought, release semaphore on %p", in_lock->trx->id, in_lock->block);
+			if (!caller_owns_trx_mutex) {
+				trx_mutex_enter(in_lock->trx);
 			}
-			buf_block_release_semaphore(in_lock->block);
+
+			if (in_lock->trx->cc_block_sem_acquired && !in_lock->trx->cc_block_sem_released) {
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, fought, releasing semaphore on %p", in_lock->trx->id, in_lock->block);
+				}
+				buf_block_release_semaphore(in_lock->block);
+				in_lock->trx->cc_block_sem_released = TRUE;
+			} else {
+				/* This can happen if row_search_for_mysql
+				reread attempt returns DB_RECORD_NOT_FOUND,
+				after this lock record has been created. */
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, fought, semaphore on %p, acquired: %lu, released: %lu",
+						in_lock->trx->id, in_lock->block, in_lock->trx->cc_block_sem_acquired, in_lock->trx->cc_block_sem_released);
+				}
+			}
+
+			if (!caller_owns_trx_mutex) {
+				trx_mutex_exit(in_lock->trx);
+			}
 		} else {
 			if (srv_concurrency_control_debug_log) {
 				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] dequeue, not fought", in_lock->trx->id);
@@ -2908,10 +2945,22 @@ lock_rec_discard(
 
 	if (srv_concurrency_control_permits > 0) {
 		if (in_lock->fought) {
-			if (srv_concurrency_control_debug_log) {
-				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, fought, release semaphore on %p", in_lock->trx->id, in_lock->block);
+			trx_mutex_enter(in_lock->trx);
+
+			if (in_lock->trx->cc_block_sem_acquired && !in_lock->trx->cc_block_sem_released) {
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, fought, releasing semaphore on %p", in_lock->trx->id, in_lock->block);
+				}
+				buf_block_release_semaphore(in_lock->block);
+				in_lock->trx->cc_block_sem_released = TRUE;
+			} else {
+				if (srv_concurrency_control_debug_log) {
+					ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, fought, semaphore on %p, acquired: %lu, released: %lu",
+						in_lock->trx->id, in_lock->block, in_lock->trx->cc_block_sem_acquired, in_lock->trx->cc_block_sem_released);
+				}
 			}
-			buf_block_release_semaphore(in_lock->block);
+
+			trx_mutex_exit(in_lock->trx);
 		} else {
 			if (srv_concurrency_control_debug_log) {
 				ib_logf(IB_LOG_LEVEL_INFO, " [" TRX_ID_FMT "] discard, not fought", in_lock->trx->id);
@@ -5176,7 +5225,7 @@ lock_release(
 			}
 #endif /* UNIV_DEBUG */
 
-			lock_rec_dequeue_from_page(lock);
+			lock_rec_dequeue_from_page(lock, FALSE);
 		} else {
 			dict_table_t*	table;
 
@@ -7356,7 +7405,7 @@ lock_cancel_waiting_and_release(
 
 	if (lock_get_type_low(lock) == LOCK_REC) {
 
-		lock_rec_dequeue_from_page(lock);
+		lock_rec_dequeue_from_page(lock, TRUE);
 	} else {
 		ut_ad(lock_get_type_low(lock) & LOCK_TABLE);
 

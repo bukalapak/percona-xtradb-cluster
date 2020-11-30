@@ -1070,7 +1070,7 @@ struct trx_t{
 	ulint           distinct_page_access;
 	const buf_block_t*	cc_block;
 	ibool		cc_block_sem_acquired;
-	ibool		bypass_cc;
+	ibool		cc_block_sem_released;
 #define	DPAH_SIZE	8192
 	byte*		distinct_page_access_hash;
 	ibool		take_stats;

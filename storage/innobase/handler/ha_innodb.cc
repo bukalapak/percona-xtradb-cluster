@@ -1673,15 +1673,10 @@ innobase_srv_conc_enter_innodb(
 #endif /* WITH_WSREP */
 
 	if (srv_concurrency_control_permits > 0) {
-		if (trx->bypass_cc) {
-			if (srv_concurrency_control_debug_log) {
-				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] force enter critical trx", trx->id);
-			}
-			return;
-		} else if (trx->lock.trx_locks.count > 1
-			   && trx->cc_block != NULL) {
+		if (trx->lock.trx_locks.count > 1
+		    && trx->cc_block != NULL) {
 
-			/* The 2 if-conditions here (above and below) are what
+			/* The if-conditions here (above and below) are what
 			tie the whole concurrency patch together. We need to
 			balance between:
 			- allowing the necessary trxs to avoid deadlock
@@ -1691,30 +1686,35 @@ innobase_srv_conc_enter_innodb(
 			enter innodb and accumulated some locks (with or
 			without contenting trx(s)).
 
+			Then there is the usual "acquired but not released yet"
+			check for the concurrency control block semaphore.
+
 			The "permits - val > 1" condition means there is at
 			least 1 other trx that has acquired the same block
 			semaphore as this trx.
 
-			When both conditions are met, we treat the trx as
-			"critical" and allow it to enter freely from this point
-			onward.
+			When all conditions are met, we treat the trx as
+			"critical" and allow it to force enter innodb.
 
 			For hot-row protection purpose, this seems to work much
 			better than the built-in thread-pool, which would allow
 			too many concurrently running trxs.
+
+			Note that we don't need trx mutex here, as the check
+			doesn't have to be precise, and no flag is being
+			modified.
 			*/
 
-			int val = buf_block_get_semaphore_value(trx->cc_block);
-			if (val >= 0
-			    && srv_concurrency_control_permits - val > 1) {
+			if (trx->cc_block_sem_acquired && !trx->cc_block_sem_released) {
+				int val = buf_block_get_semaphore_value(trx->cc_block);
+				if (val >= 0
+				    && srv_concurrency_control_permits - val > 1) {
 
-				if (srv_concurrency_control_debug_log) {
-					ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] force enter as potentially holding a lock with waiting trx(s)", trx->id);
+					if (srv_concurrency_control_debug_log) {
+						ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] holding semaphore with waiting trx(s), force enter", trx->id);
+					}
+					return;
 				}
-				// Also allow the critical trx to bypass any
-				// further concurrency control.
-				trx->bypass_cc = TRUE;
-				return;
 			}
 		}
 	}
@@ -5163,12 +5163,10 @@ innobase_kill_connection(
 	{
 		trx_mutex_enter(trx);
 
-		if (trx->cc_block_sem_acquired) {
-			if (srv_concurrency_control_debug_log) {
-				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] kill connection, release semaphore on %p", trx->id, trx->cc_block);
-			}
+		if (trx->cc_block_sem_acquired && !trx->cc_block_sem_released) {
+			ib_logf(IB_LOG_LEVEL_WARN, "[" TRX_ID_FMT "] kill connection, release semaphore on %p", trx->id, trx->cc_block);
 			buf_block_release_semaphore(trx->cc_block);
-			trx->cc_block_sem_acquired = FALSE;
+			trx->cc_block_sem_released = TRUE;
 		} else {
 			if (srv_concurrency_control_debug_log) {
 				ib_logf(IB_LOG_LEVEL_INFO, "[" TRX_ID_FMT "] kill connection", trx->id);
@@ -9750,6 +9748,16 @@ ha_innobase::index_read(
 
 				ret = row_search_for_mysql((byte*) buf, mode, prebuilt,
 							   match_mode, 0, acquired);
+
+				if (ret != DB_SUCCESS && acquired) {
+					trx_mutex_enter(prebuilt->trx);
+					if (prebuilt->trx->cc_block_sem_acquired && !prebuilt->trx->cc_block_sem_released) {
+						ib_logf(IB_LOG_LEVEL_WARN, "[" TRX_ID_FMT "] reread failed with %d, releasing semaphore on %p", prebuilt->trx->id, ret, block);
+						buf_block_release_semaphore(block);
+						prebuilt->trx->cc_block_sem_released = TRUE;
+					}
+					trx_mutex_exit(prebuilt->trx);
+				}
 			} else {
 				srv_stats.n_concurrency_control_dropped.inc();
 			}

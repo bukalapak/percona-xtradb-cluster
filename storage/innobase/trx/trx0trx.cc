@@ -277,7 +277,7 @@ trx_create(void)
 
 	trx->cc_block = NULL;
 	trx->cc_block_sem_acquired = FALSE;
-	trx->bypass_cc = FALSE;
+	trx->cc_block_sem_released = FALSE;
 
 	trx->op_info = "";
 
@@ -1058,7 +1058,7 @@ trx_start_low(
 
 	trx->cc_block = NULL;
 	trx->cc_block_sem_acquired = FALSE;
-	trx->bypass_cc = FALSE;
+	trx->cc_block_sem_released = FALSE;
 
 	/* The initial value for trx->no: TRX_ID_MAX is used in
 	read_view_open_now: */
