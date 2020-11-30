@@ -4349,7 +4349,7 @@ wait_table_again:
 			err = sel_set_rec_lock(btr_pcur_get_block(pcur),
 					       next_rec, index, offsets,
 					       prebuilt->select_lock_type,
-					       LOCK_GAP, thr, FALSE);
+					       LOCK_GAP, thr, fought);
 
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
@@ -4481,7 +4481,7 @@ rec_loop:
 			err = sel_set_rec_lock(btr_pcur_get_block(pcur),
 					       rec, index, offsets,
 					       prebuilt->select_lock_type,
-					       LOCK_ORDINARY, thr, FALSE);
+					       LOCK_ORDINARY, thr, fought);
 
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
@@ -4634,7 +4634,7 @@ wrong_offs:
 					btr_pcur_get_block(pcur),
 					rec, index, offsets,
 					prebuilt->select_lock_type, LOCK_GAP,
-					thr, FALSE);
+					thr, fought);
 
 				switch (err) {
 				case DB_SUCCESS_LOCKED_REC:
@@ -4683,7 +4683,7 @@ wrong_offs:
 					btr_pcur_get_block(pcur),
 					rec, index, offsets,
 					prebuilt->select_lock_type, LOCK_GAP,
-					thr, FALSE);
+					thr, fought);
 
 				switch (err) {
 				case DB_SUCCESS_LOCKED_REC:
