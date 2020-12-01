@@ -1755,7 +1755,8 @@ lock_rec_find_similar_on_page(
 	ulint		type_mode,	/*!< in: lock type_mode field */
 	ulint		heap_no,	/*!< in: heap number of the record */
 	lock_t*		lock,		/*!< in: lock_rec_get_first_on_page() */
-	const trx_t*	trx)		/*!< in: transaction */
+	const trx_t*	trx,		/*!< in: transaction */
+	ibool		fought)		/*!< in: fought for the record lock */
 {
 	ut_ad(lock_mutex_own());
 
@@ -1765,7 +1766,8 @@ lock_rec_find_similar_on_page(
 
 		if (lock->trx == trx
 		    && lock->type_mode == type_mode
-		    && lock_rec_get_n_bits(lock) > heap_no) {
+		    && lock_rec_get_n_bits(lock) > heap_no
+		    && lock->fought == fought) {
 
 			return(lock);
 		}
@@ -2379,7 +2381,7 @@ lock_rec_add_to_queue(
 		we can just set the bit */
 
 		lock = lock_rec_find_similar_on_page(
-			type_mode, heap_no, first_lock, trx);
+			type_mode, heap_no, first_lock, trx, fought);
 
 		if (lock) {
 
@@ -2493,7 +2495,8 @@ lock_rec_lock_fast(
 		if (lock_rec_get_next_on_page(lock)
 		     || lock->trx != trx
 		     || lock->type_mode != (mode | LOCK_REC)
-		     || lock_rec_get_n_bits(lock) <= heap_no) {
+		     || lock_rec_get_n_bits(lock) <= heap_no
+		     || lock->fought != fought) {
 
 			status = LOCK_REC_FAIL;
 		} else if (!impl) {
